@@ -11,9 +11,20 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocket.Server({ server });
 
-// 房间：roomId -> { host: {ws, clientId, name}, members: Map<clientId, {ws, name}>, forwardPort }
+// 房间：roomId -> { host: {ws, clientId, name, virtualIp}, members: Map<clientId, {ws, name, virtualIp}>, forwardPort, subnet, ipCounter }
 const rooms = new Map();
 const clientRoom = new Map();
+
+const SUBNET_BASE = '10.0';
+let subnetCounter = 1;
+
+function allocateIp(room) {
+    if (!room.subnet) {
+        room.subnet = `${SUBNET_BASE}.${subnetCounter++}`;
+        room.ipCounter = 1;
+    }
+    return `${room.subnet}.${room.ipCounter++}`;
+}
 
 function broadcastJson(roomId, message, excludeId = null) {
     const room = rooms.get(roomId);
@@ -65,14 +76,13 @@ wss.on('connection', (ws) => {
             // 主机创建房间，并声明转发端口
             case 'create_room': {
                 const roomId = Math.random().toString(36).substr(2, 6).toUpperCase();
-                rooms.set(roomId, {
-                    host: { ws, clientId, name: msg.name || '主机' },
-                    members: new Map(),
-                    forwardPort: msg.port || 25565
-                });
+                const newRoom = { host: null, members: new Map(), forwardPort: msg.port || 25565, subnet: null, ipCounter: 1 };
+                rooms.set(roomId, newRoom);
+                const hostIp = allocateIp(newRoom);
+                newRoom.host = { ws, clientId, name: msg.name || '主机', virtualIp: hostIp };
                 clientRoom.set(clientId, roomId);
-                ws.send(JSON.stringify({ type: 'room_created', roomId, clientId, port: msg.port || 25565 }));
-                console.log(`房间创建: ${roomId} 端口: ${msg.port || 25565}`);
+                ws.send(JSON.stringify({ type: 'room_created', roomId, clientId, virtualIp: hostIp, port: msg.port || 25565 }));
+                console.log(`房间创建: ${roomId} IP: ${hostIp}`);
                 break;
             }
 
@@ -88,27 +98,31 @@ wss.on('connection', (ws) => {
                     ws.send(JSON.stringify({ type: 'error', message: '房间已满' }));
                     return;
                 }
-                room.members.set(clientId, { ws, name: name || '成员' });
+                const memberIp = allocateIp(room);
+                room.members.set(clientId, { ws, name: name || '成员', virtualIp: memberIp });
                 clientRoom.set(clientId, roomId);
 
                 const memberList = [];
                 room.members.forEach((m, id) => {
-                    if (id !== clientId) memberList.push({ id, name: m.name });
+                    if (id !== clientId) memberList.push({ id, name: m.name, virtualIp: m.virtualIp });
                 });
+                // 加入主机信息
+                memberList.unshift({ id: room.host.clientId, name: room.host.name, virtualIp: room.host.virtualIp });
 
                 ws.send(JSON.stringify({
                     type: 'room_joined', roomId, clientId,
+                    virtualIp: memberIp,
                     hostName: room.host.name,
                     forwardPort: room.forwardPort,
                     members: memberList
                 }));
 
-                // 通知主机有新成员，主机需要开始监听该成员的连接
+                // 通知主机有新成员
                 room.host.ws.send(JSON.stringify({
-                    type: 'member_joined', id: clientId, name: name || '成员'
+                    type: 'member_joined', id: clientId, name: name || '成员', virtualIp: memberIp
                 }));
 
-                broadcastJson(roomId, { type: 'member_joined', id: clientId, name: name || '成员' }, clientId);
+                broadcastJson(roomId, { type: 'member_joined', id: clientId, name: name || '成员', virtualIp: memberIp }, clientId);
                 console.log(`${name} 加入: ${roomId}`);
                 break;
             }
