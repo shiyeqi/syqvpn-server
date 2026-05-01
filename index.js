@@ -15,8 +15,8 @@ const wss = new WebSocket.Server({ server });
 const rooms = new Map();
 const clientRoom = new Map();
 
-const SUBNET_BASE = '10.0';
-let subnetCounter = 1;
+const SUBNET_BASE = '192.168';
+let subnetCounter = 10;
 
 function allocateIp(room) {
     if (!room.subnet) {
