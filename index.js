@@ -122,6 +122,12 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => handleLeave(clientId));
+
+    // 心跳保活，防止 Railway 断开空闲连接
+    const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.ping();
+    }, 25000);
+    ws.on('close', () => clearInterval(pingInterval));
 });
 
 function handleLeave(clientId) {
